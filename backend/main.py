@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Form, Request, BackgroundTasks, WebSocket, WebSocketDisconnect, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -54,6 +54,94 @@ from app.models.sensor_reading import SensorReading
 from app.core.database import SessionLocal, engine, Base, IS_SQLITE
 from enum import Enum
 from fastapi.responses import FileResponse, HTMLResponse, Response, RedirectResponse, StreamingResponse, JSONResponse
+from fastapi.middleware.sessions import SessionMiddleware
+from sqlalchemy.orm import Session as DBSession
+# --- Session Middleware for admin login system ---
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "super-secret-key"), https_only=True)
+
+# --- Utility functions for session-based admin login ---
+def verify_admin(db: DBSession, username: str, password: str):
+    print(f"DEBUG: Checking username={username}, password={password}")
+    user = db.query(AdminUser).filter(AdminUser.username == username).first()
+    if user and verify_password(password, user.password_hash):
+        print("DEBUG: Admin verified")
+        return user
+    print("DEBUG: Admin not found or password mismatch")
+    return None
+
+def admin_count_session(db: DBSession):
+    return db.query(AdminUser).count()
+
+def is_logged_in(request: Request):
+    return request.session.get("admin_id") is not None
+# --- Session-based admin login and setup routes ---
+@app.get("/admin", response_class=HTMLResponse)
+def admin_login_page(request: Request):
+    return """
+    <form method="post" action="/admin/session-login">
+        <input name="username" placeholder="Username" required>
+        <input name="password" type="password" placeholder="Password" required>
+        <button type="submit">Login</button>
+    </form>
+    """
+
+@app.post("/admin/session-login")
+def admin_session_login(
+    request: Request,
+    response: Response,
+    username: str = Form(...),
+    password: str = Form(...),
+    db: DBSession = Depends(SessionLocal)
+):
+    print(f"DEBUG: Received login POST username={username}, password={password}")
+    if admin_count_session(db) == 0:
+        print("DEBUG: No admins, redirecting to setup")
+        return RedirectResponse("/admin/setup", status_code=303)
+    user = verify_admin(db, username, password)
+    if not user:
+        return HTMLResponse("<h3>Invalid admin credentials.</h3>", status_code=401)
+    request.session["admin_id"] = user.id
+    print(f"DEBUG: Login successful, session set admin_id={user.id}")
+    return RedirectResponse("/admin/setup", status_code=303)
+
+@app.get("/admin/setup", response_class=HTMLResponse)
+def admin_setup_page(request: Request):
+    if not is_logged_in(request):
+        print("DEBUG: Not logged in, redirecting to /admin")
+        return RedirectResponse("/admin", status_code=303)
+    return """
+    <h2>Admin Setup Page (Protected)</h2>
+    <form method="post" action="/admin/setup">
+        <input name="username" placeholder="New Admin Username" required>
+        <input name="password" type="password" placeholder="New Admin Password" required>
+        <button type="submit">Create Admin</button>
+    </form>
+    """
+
+@app.post("/admin/setup")
+def admin_setup(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    db: DBSession = Depends(SessionLocal)
+):
+    if not is_logged_in(request):
+        print("DEBUG: Not logged in, redirecting to /admin")
+        return RedirectResponse("/admin", status_code=303)
+    if db.query(AdminUser).filter(AdminUser.username == username).first():
+        return HTMLResponse("<h3>Admin already exists.</h3>", status_code=400)
+    from main import hash_password  # Use your existing hash_password function
+    new_admin = AdminUser(username=username, password_hash=hash_password(password))
+    db.add(new_admin)
+    db.commit()
+    print(f"DEBUG: Created new admin username={username}")
+    return HTMLResponse("<h3>Admin created successfully!</h3>")
+
+@app.get("/admin/logout")
+def admin_logout(request: Request):
+    request.session.clear()
+    print("DEBUG: Session cleared, logged out")
+    return RedirectResponse("/admin", status_code=303)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.openapi.utils import get_openapi
 from fastapi.exceptions import RequestValidationError
