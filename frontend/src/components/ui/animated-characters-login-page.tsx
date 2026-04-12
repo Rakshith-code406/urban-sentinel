@@ -611,57 +611,36 @@ function LoginPage(props: LoginPageProps) {
       ? Boolean(savedLogin?.email || savedLogin?.identifier)
       : Boolean(savedLogin?.phone || savedLogin?.phoneWithCode);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // Admin login handler (for /admin/session-login)
+  const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (loginMethod !== "email") {
-      setError("Use your registered email and password.");
-      return;
-    }
-
     setIsLoading(true);
-
     try {
-      const payload = await authApi.login({
-        email: email.trim(),
-        password,
+      const formData = new FormData();
+      formData.append("username", email.trim());
+      formData.append("password", password);
+      const response = await fetch("/admin/session-login", {
+        method: "POST",
+        body: formData,
+        credentials: "include",
+        redirect: "follow"
       });
-
-      if (payload?.status !== "success") {
-        throw new Error(payload?.message || "Login failed");
+      if (response.redirected) {
+        window.location.href = response.url;
+        return;
       }
-
-      setAuthSession({
-        user: payload.user,
-        token: payload.access_token || payload.token || "",
-      });
-      void prefetchDashboardBootstrap();
-
-      if (rememberMe) {
-        localStorage.setItem("rememberedIdentifier", email.trim());
-        localStorage.setItem(
-          "rememberedLoginProfile",
-          JSON.stringify({
-            identifier: email.trim(),
-            email: payload.user?.email || email.trim(),
-            countryCode,
-            phone: loginMethod === "phone" ? phone.trim() : "",
-            phoneWithCode: loginMethod === "phone" ? `${countryCode}${phone.trim()}` : payload.user?.phone || "",
-            password,
-            source: "login",
-            savedAt: new Date().toISOString(),
-          })
-        );
+      if (response.ok) {
+        // Optionally handle success
+        window.location.href = "/admin/setup";
+        return;
       } else {
-        localStorage.removeItem("rememberedIdentifier");
-        localStorage.removeItem("rememberedLoginProfile");
+        const text = await response.text();
+        setError(text || "Login failed");
       }
-
-      navigate("/home", { replace: true });
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Invalid email or password";
-      setError(message);
-      console.error("Login error:", err);
+      setError("Network error");
+      console.error("Admin login error:", err);
     } finally {
       setIsLoading(false);
     }
@@ -891,7 +870,7 @@ function LoginPage(props: LoginPageProps) {
           </div>
 
           {/* Login Form */}
-          <form onSubmit={handleSubmit} className="space-y-5" autoComplete="off">
+          <form onSubmit={handleAdminLogin} className="space-y-5" autoComplete="off">
             <div className="space-y-3">
               <Label className="text-sm font-medium">Choose login method</Label>
               <div className="grid grid-cols-2 gap-3 rounded-2xl bg-primary/5 p-1.5">
