@@ -56,6 +56,9 @@ from enum import Enum
 from fastapi.responses import FileResponse, HTMLResponse, Response, RedirectResponse, StreamingResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session as DBSession
+
+# --- FastAPI app instance ---
+app = FastAPI()
 # --- Session Middleware for admin login system ---
 app.add_middleware(SessionMiddleware, secret_key=os.getenv("SECRET_KEY", "super-secret-key"), https_only=True)
 
