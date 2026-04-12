@@ -1,0 +1,8 @@
+Oracle database connection failed during startup; falling back to SQLite. Reason: (oracledb.exceptions.OperationalError) DPY-6005: cannot connect to database (CONNECTION_ID=e6wYnYp/xrhUg8ij1XVv0g==).
+DPY-3010: connections to this database server version are not supported by python-oracledb in thin mode
+Help: https://python-oracledb.readthedocs.io/en/latest/user_guide/troubleshooting.html#dpy-3010
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+[OPENWEATHER] API KEY loaded: True
+Server running on http://127.0.0.1:8000
+[OPENWEATHER] API KEY loaded: True
+[IOT BRIDGE] Auto-start disabled (IOT_AUTO_START=false).
