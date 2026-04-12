@@ -1,0 +1,4 @@
+# Urban Sentinel Backend - Root requirements.txt
+# This file ensures Render and other platforms install all dependencies correctly.
+
+-r backend/requirements.txt
