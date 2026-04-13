@@ -121,7 +121,11 @@ export default function ForgotPassword() {
     setLoading(true);
     setMessage("");
     try {
-      await authApi.resetForgotPassword({ email: getFinalEmail(), new_password: newPassword });
+      await authApi.resetForgotPassword({
+        email: getFinalEmail(),
+        otp: otpDigits.join(""),
+        new_password: newPassword,
+      });
       setMessage("Password reset successful. Please login.");
       setTimeout(() => navigate("/login"), 800);
     } catch (error) {

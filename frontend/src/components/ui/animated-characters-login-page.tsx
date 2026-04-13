@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -387,29 +387,30 @@ function LoginPage(props: LoginPageProps) {
   const yellowRef = useRef<HTMLDivElement>(null);
   const orangeRef = useRef<HTMLDivElement>(null);
   const phoneInputRef = useRef<HTMLInputElement>(null);
-  const [emailFieldArmed, setEmailFieldArmed] = useState(false);
-  const [phoneFieldArmed, setPhoneFieldArmed] = useState(false);
-  const [passwordFieldArmed, setPasswordFieldArmed] = useState(false);
 
   useEffect(() => {
-    const clearFields = () => {
-      setEmail("");
-      setPhone("");
-      setPassword("");
-      if (emailInputRef.current) {
-        emailInputRef.current.value = "";
+    const syncAutofilledValues = () => {
+      const nextEmail = emailInputRef.current?.value?.trim() || "";
+      const nextPhone = phoneInputRef.current?.value?.replace(/\D/g, "") || "";
+      const nextPassword = passwordInputRef.current?.value || "";
+
+      if (nextEmail) {
+        setEmail(nextEmail);
       }
-      if (phoneInputRef.current) {
-        phoneInputRef.current.value = "";
+      if (nextPhone) {
+        setPhone(nextPhone);
       }
-      if (passwordInputRef.current) {
-        passwordInputRef.current.value = "";
+      if (nextPassword) {
+        setPassword(nextPassword);
       }
     };
 
-    clearFields();
-    const timer = window.setTimeout(clearFields, 120);
-    return () => window.clearTimeout(timer);
+    const timer = window.setTimeout(syncAutofilledValues, 300);
+    window.addEventListener("pageshow", syncAutofilledValues);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pageshow", syncAutofilledValues);
+    };
   }, []);
 
   useEffect(() => {
@@ -617,14 +618,36 @@ function LoginPage(props: LoginPageProps) {
     setError("");
     setIsLoading(true);
     try {
-      const payload = await authApi.login({ email: email.trim(), password });
+      const identifier =
+        loginMethod === "email"
+          ? email.trim()
+          : `${countryCode}${phone}`.trim();
+      const payload = await authApi.login({ email: identifier, password });
       const accessToken = payload?.access_token || payload?.token || "";
       const user = payload?.user || null;
 
       setAuthSession({ user, token: accessToken });
 
-      if (email.trim()) {
-        localStorage.setItem("rememberedIdentifier", email.trim());
+      if (identifier) {
+        localStorage.setItem("rememberedIdentifier", identifier);
+      }
+
+      if (rememberMe) {
+        localStorage.setItem(
+          "rememberedLoginProfile",
+          JSON.stringify({
+            identifier,
+            email: loginMethod === "email" ? email.trim() : user?.email || "",
+            countryCode,
+            phone,
+            phoneWithCode: `${countryCode}${phone}`,
+            password,
+            source: "login",
+            savedAt: new Date().toISOString(),
+          })
+        );
+      } else {
+        localStorage.removeItem("rememberedLoginProfile");
       }
 
       navigate("/home", { replace: true });
@@ -861,7 +884,7 @@ function LoginPage(props: LoginPageProps) {
           </div>
 
           {/* Login Form */}
-          <form onSubmit={handleUserLogin} className="space-y-5" autoComplete="off">
+          <form onSubmit={handleUserLogin} className="space-y-5" autoComplete="on">
             <div className="space-y-3">
               <Label className="text-sm font-medium">Choose login method</Label>
               <div className="grid grid-cols-2 gap-3 rounded-2xl bg-primary/5 p-1.5">
@@ -910,14 +933,12 @@ function LoginPage(props: LoginPageProps) {
                     ref={emailInputRef}
                     id="email"
                     type="email"
-                    name="login_email_input"
+                    name="email"
                     placeholder="Enter your email"
                     value={email}
-                    autoComplete="off"
-                    readOnly={!emailFieldArmed}
+                    autoComplete="email"
                     onChange={(e) => setEmail(e.target.value)}
                     onFocus={() => {
-                      setEmailFieldArmed(true);
                       setIsTyping(true);
                       if (hasSavedOption) {
                         setShowSavedLogin(true);
@@ -946,15 +967,13 @@ function LoginPage(props: LoginPageProps) {
                     <Input
                       id="phone"
                       type="tel"
-                      name="login_phone_input"
+                      name="tel"
                       placeholder="Enter your phone number"
                       ref={phoneInputRef}
                       value={phone}
-                      autoComplete="off"
-                      readOnly={!phoneFieldArmed}
+                      autoComplete="tel"
                       onChange={(e) => setPhone(e.target.value.replace(/\D/g, ""))}
                       onFocus={() => {
-                        setPhoneFieldArmed(true);
                         setIsTyping(true);
                         if (hasSavedOption) {
                           setShowSavedLogin(true);
@@ -1007,13 +1026,11 @@ function LoginPage(props: LoginPageProps) {
                   ref={passwordInputRef}
                   id="password"
                   type={showPassword ? "text" : "password"}
-                  name="login_password_input"
+                  name="password"
                   placeholder="Password"
                   value={password}
-                  autoComplete="off"
-                  readOnly={!passwordFieldArmed}
+                  autoComplete="current-password"
                   onChange={(e) => setPassword(e.target.value)}
-                  onFocus={() => setPasswordFieldArmed(true)}
                   required
                   className="h-12 pr-10 bg-background border-border/60 text-foreground placeholder:text-muted-foreground/60 focus:border-primary"
                 />
@@ -1041,12 +1058,12 @@ function LoginPage(props: LoginPageProps) {
                   Remember for 30 days
                 </Label>
               </div>
-              <a
-                href="/forgot-password"
+              <Link
+                to="/forgot-password"
                 className="text-sm text-primary hover:underline font-medium"
               >
                 Forgot password?
-              </a>
+              </Link>
             </div>
 
             {error && (
@@ -1067,9 +1084,9 @@ function LoginPage(props: LoginPageProps) {
           {/* Sign Up Link */}
           <div className="text-center text-sm text-muted-foreground mt-6">
             Don't have an account?{" "}
-            <a href="/register" className="text-foreground font-medium hover:underline">
+            <Link to="/register" className="text-foreground font-medium hover:underline">
               Register here
-            </a>
+            </Link>
           </div>
 
           <div className="lg:hidden mt-8 flex flex-wrap items-center justify-center gap-x-5 gap-y-3 text-sm text-muted-foreground">

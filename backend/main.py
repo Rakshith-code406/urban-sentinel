@@ -2339,6 +2339,29 @@ def find_memory_user(email: Optional[str], password: Optional[str]) -> Optional[
     return None
 
 
+def find_user_for_login_identifier(db: Session, identifier: str) -> Optional[User]:
+    normalized_identifier = sanitize_text_input(identifier)
+    if not normalized_identifier:
+        return None
+
+    if "@" in normalized_identifier:
+        normalized_email = normalize_identifier(normalized_identifier)
+        return (
+            db.query(User)
+            .filter(User.email == normalized_email, User.is_active == True)
+            .first()
+        )
+
+    normalized_phone = normalize_phone(normalized_identifier)
+    if not normalized_phone:
+        return None
+
+    for user in db.query(User).filter(User.is_active == True).all():
+        if phones_match(user.phone, normalized_phone):
+            return user
+    return None
+
+
 class RegisterPayload(StrictBaseModel):
     full_name: str
     email: str
@@ -2393,10 +2416,16 @@ class LoginPayload(StrictBaseModel):
     @field_validator("email")
     @classmethod
     def validate_email(cls, value: str) -> str:
+        identifier = sanitize_text_input(value)
+        if "@" in identifier:
+            try:
+                return validate_email_input(identifier)
+            except HTTPException as exc:
+                raise ValueError(exc.detail) from exc
         try:
-            return validate_email_input(value)
+            return validate_phone_input(identifier) or ""
         except HTTPException as exc:
-            raise ValueError(exc.detail) from exc
+            raise ValueError("Enter a valid email or phone number") from exc
 
     @field_validator("password")
     @classmethod
@@ -2447,6 +2476,7 @@ class ForgotPasswordVerifyPayload(StrictBaseModel):
 
 class ResetPasswordPayload(StrictBaseModel):
     email: str
+    otp: str
     new_password: str
 
     @field_validator("email")
@@ -2456,6 +2486,14 @@ class ResetPasswordPayload(StrictBaseModel):
             return validate_email_input(value)
         except HTTPException as exc:
             raise ValueError(exc.detail) from exc
+
+    @field_validator("otp")
+    @classmethod
+    def validate_otp(cls, value: str) -> str:
+        otp = sanitize_text_input(value)
+        if not re.fullmatch(r"\d{6}", otp):
+            raise ValueError("Enter a valid 6-digit OTP")
+        return otp
 
     @field_validator("new_password")
     @classmethod
@@ -3093,8 +3131,7 @@ def user_register(payload: RegisterPayload, db: Session = Depends(get_db)):
 
 @app.post("/auth/login")
 def user_login(payload: LoginPayload, db: Session = Depends(get_db)):
-    normalized_email = normalize_identifier(payload.email)
-    user = db.query(User).filter(User.email == normalized_email, User.is_active == True).first()
+    user = find_user_for_login_identifier(db, payload.email)
     if not user or not verify_password(payload.password or "", user.password_hash):
         user_record = find_memory_user(payload.email, payload.password)
         if user_record:
@@ -3228,6 +3265,24 @@ def reset_password(payload: ResetPasswordPayload, db: Session = Depends(get_db))
         return {
             "status": "error",
             "message": "User not found",
+        }
+
+    if not user.reset_code_hash or not user.reset_code_expires_at:
+        return {
+            "status": "error",
+            "message": "OTP verification required",
+        }
+
+    if user.reset_code_expires_at < datetime.utcnow():
+        return {
+            "status": "error",
+            "message": "OTP expired",
+        }
+
+    if not hmac.compare_digest(user.reset_code_hash, hash_reset_code(payload.otp)):
+        return {
+            "status": "error",
+            "message": "OTP verification failed",
         }
 
     user.password_hash = hash_password(payload.new_password)
