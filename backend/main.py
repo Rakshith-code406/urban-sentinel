@@ -2362,6 +2362,21 @@ def find_user_for_login_identifier(db: Session, identifier: str) -> Optional[Use
     return None
 
 
+def find_user_for_password_reset_email(db: Session, email: str) -> Optional[User]:
+    normalized_email = normalize_identifier(email)
+    if not normalized_email:
+        return None
+
+    user = db.query(User).filter(User.email == normalized_email).first()
+    if user:
+        return user
+
+    if normalized_email == FALLBACK_LOGIN_EMAIL:
+        return ensure_public_user(db)
+
+    return None
+
+
 class RegisterPayload(StrictBaseModel):
     full_name: str
     email: str
@@ -3192,7 +3207,7 @@ def auth_login_get_hint():
 @app.post("/send-otp")
 def send_otp(payload: ForgotPasswordRequestPayload, db: Session = Depends(get_db)):
     normalized_email = normalize_identifier(payload.email)
-    user = db.query(User).filter(User.email == normalized_email).first()
+    user = find_user_for_password_reset_email(db, normalized_email)
     if not user:
         return {"status": "error", "message": "User not found"}
 
@@ -3232,7 +3247,7 @@ def send_otp(payload: ForgotPasswordRequestPayload, db: Session = Depends(get_db
 @app.post("/verify-otp")
 def verify_otp(payload: ForgotPasswordVerifyPayload, db: Session = Depends(get_db)):
     normalized_email = normalize_identifier(payload.email)
-    user = db.query(User).filter(User.email == normalized_email).first()
+    user = find_user_for_password_reset_email(db, normalized_email)
     if not user or not user.reset_code_hash or not user.reset_code_expires_at:
         return {
             "status": "error",
@@ -3260,7 +3275,7 @@ def verify_otp(payload: ForgotPasswordVerifyPayload, db: Session = Depends(get_d
 @app.post("/reset-password")
 def reset_password(payload: ResetPasswordPayload, db: Session = Depends(get_db)):
     normalized_email = normalize_identifier(payload.email)
-    user = db.query(User).filter(User.email == normalized_email).first()
+    user = find_user_for_password_reset_email(db, normalized_email)
     if not user:
         return {
             "status": "error",
