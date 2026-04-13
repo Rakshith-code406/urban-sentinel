@@ -8,10 +8,12 @@ export default function ForgotPassword() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [otpDigits, setOtpDigits] = useState(["", "", "", "", "", ""]);
+  const [screenOtp, setScreenOtp] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [step, setStep] = useState(1);
   const [message, setMessage] = useState("");
+  const [copyStatus, setCopyStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [resendIn, setResendIn] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
@@ -57,8 +59,14 @@ export default function ForgotPassword() {
     event.preventDefault();
     setLoading(true);
     setMessage("");
+    setCopyStatus("");
     try {
       const payload = await authApi.requestForgotPassword({ email: getFinalEmail() });
+      const nextOtp = String(payload?.otp || "");
+      setScreenOtp(nextOtp);
+      if (nextOtp.length === 6) {
+        setOtpDigits(nextOtp.split(""));
+      }
       setStep(2);
       setMessage(payload.detail || payload.message || "OTP sent. Check system console.");
       setResendIn(60);
@@ -86,11 +94,18 @@ export default function ForgotPassword() {
     if (resendIn > 0 || loading) return;
     setLoading(true);
     setMessage("");
+    setCopyStatus("");
     try {
       const payload = await authApi.requestForgotPassword({ email: getFinalEmail() });
+      const nextOtp = String(payload?.otp || "");
+      setScreenOtp(nextOtp);
       setMessage(payload.detail || payload.message || "OTP sent. Check system console.");
-      setOtpDigits(["", "", "", "", "", ""]);
-      otpRefs.current[0]?.focus();
+      if (nextOtp.length === 6) {
+        setOtpDigits(nextOtp.split(""));
+      } else {
+        setOtpDigits(["", "", "", "", "", ""]);
+        otpRefs.current[0]?.focus();
+      }
       setResendIn(60);
     } catch (error) {
       setMessage(error.message);
@@ -136,6 +151,18 @@ export default function ForgotPassword() {
   const handleOtpKeyDown = (index, event) => {
     if (event.key === "Backspace" && !otpDigits[index] && index > 0) {
       otpRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const handleCopyOtp = async () => {
+    if (!screenOtp) return;
+    try {
+      await navigator.clipboard.writeText(screenOtp);
+      setCopyStatus("OTP copied");
+      window.setTimeout(() => setCopyStatus(""), 1600);
+    } catch {
+      setCopyStatus("Copy failed");
+      window.setTimeout(() => setCopyStatus(""), 1600);
     }
   };
 
@@ -209,6 +236,21 @@ export default function ForgotPassword() {
 
         {step === 2 && (
           <form onSubmit={verifyCode}>
+            {screenOtp ? (
+              <div className="auth-otp-card">
+                <p className="auth-otp-label">Your OTP</p>
+                <div className="auth-otp-display">{screenOtp}</div>
+                <button
+                  type="button"
+                  className="auth-otp-copy-btn"
+                  onClick={handleCopyOtp}
+                >
+                  Copy OTP
+                </button>
+                {copyStatus ? <p className="auth-otp-copy-status">{copyStatus}</p> : null}
+              </div>
+            ) : null}
+
             <label htmlFor="otp-digit-0">Enter Verification Code</label>
             <div className="otp-grid">
               {otpDigits.map((digit, index) => (
