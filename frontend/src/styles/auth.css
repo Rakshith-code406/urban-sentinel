@@ -177,6 +177,48 @@
   justify-content: start;
 }
 
+.auth-otp-card {
+  margin: 0 0 10px;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(29, 78, 216, 0.18);
+  background: linear-gradient(135deg, rgba(219, 234, 254, 0.9), rgba(224, 242, 254, 0.9));
+}
+
+.auth-otp-label {
+  margin: 0 0 8px !important;
+  color: #1e3a8a !important;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-otp-display {
+  margin-bottom: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: 0.28em;
+  text-align: center;
+}
+
+.auth-otp-copy-btn {
+  margin-top: 0 !important;
+  width: 100%;
+}
+
+.auth-otp-copy-status {
+  margin: 8px 0 0 !important;
+  color: #0f766e !important;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-align: center;
+}
+
 .otp-input {
   text-align: center;
   font-size: 1.2rem !important;
