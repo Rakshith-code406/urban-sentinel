@@ -2669,6 +2669,35 @@ def create_admin_user_record(db: Session, payload: AdminCreatePayload) -> AdminU
         return admin
 
 
+def credentials_match_legacy_admin(username: str, password: str) -> bool:
+    normalized_username = (username or "").strip().lower()
+    return bool(
+        LEGACY_ADMIN_USERNAME
+        and LEGACY_ADMIN_PASSWORD
+        and normalized_username == LEGACY_ADMIN_USERNAME.strip().lower()
+        and (password or "") == LEGACY_ADMIN_PASSWORD
+    )
+
+
+def resolve_admin_account_for_login(db: Session, username: str, password: str) -> Optional[AdminUser]:
+    account = find_admin_by_username(db, username)
+    if account and verify_password(password or "", account.password_hash):
+        return account
+
+    if credentials_match_legacy_admin(username, password):
+        account, _ = upsert_admin_recovery_record(
+            db,
+            AdminCreatePayload(
+                username=(username or "").strip().lower(),
+                password=password,
+                full_name="System Administrator",
+            ),
+        )
+        return account
+
+    return None
+
+
 def upsert_admin_recovery_record(db: Session, payload: AdminCreatePayload) -> tuple[AdminUser, bool]:
     username = (payload.username or "").strip().lower()
     password = (payload.password or "").strip()
@@ -2709,22 +2738,8 @@ def admin_create(payload: AdminCreatePayload, _: dict = Depends(get_current_admi
 
 @app.post("/admin/login", include_in_schema=False)
 def admin_login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
-    account = find_admin_by_username(db, username)
+    account = resolve_admin_account_for_login(db, username, password)
     if not account:
-        if (
-            admin_count(db) == 0
-            and LEGACY_ADMIN_USERNAME
-            and LEGACY_ADMIN_PASSWORD
-            and username == LEGACY_ADMIN_USERNAME
-            and password == LEGACY_ADMIN_PASSWORD
-        ):
-            account = create_admin_user_record(
-                db,
-                AdminCreatePayload(username=username, password=password, full_name="System Administrator"),
-            )
-        else:
-            raise HTTPException(status_code=401, detail="Invalid admin credentials")
-    if not verify_password(password or "", account.password_hash):
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
     token = create_access_token(build_identity_token_payload("admin", build_admin_identity(account)))
     return {"access_token": token, "admin": {"id": account.id, "username": account.username}}
@@ -2734,8 +2749,8 @@ def admin_login(username: str = Form(...), password: str = Form(...), db: Sessio
 def admin_session_login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
     if admin_count(db) == 0:
         return RedirectResponse(url="/admin/setup", status_code=303)
-    account = find_admin_by_username(db, username)
-    if not account or not verify_password(password or "", account.password_hash):
+    account = resolve_admin_account_for_login(db, username, password)
+    if not account:
         return HTMLResponse(
             content="<h3 style='font-family:Segoe UI;padding:24px;'>Invalid admin credentials.</h3>",
             status_code=401,
@@ -2847,9 +2862,6 @@ def delete_worker_reset_request(
 @app.get("/admin/setup", response_class=HTMLResponse, include_in_schema=False)
 def admin_setup_page(request: Request, db: Session = Depends(get_db)):
     existing_admins = db.query(AdminUser).order_by(AdminUser.username.asc()).all()
-    if existing_admins and not request_is_localhost(request):
-        return RedirectResponse(url="/admin", status_code=303)
-
     if existing_admins:
         admin_list = "".join(
             f"<li><strong>{escape(item.username)}</strong></li>"
@@ -2878,7 +2890,7 @@ def admin_setup_page(request: Request, db: Session = Depends(get_db)):
 <body>
   <form class="card" method="post" action="/admin/setup/recover">
     <h1>Admin Recovery</h1>
-    <p>An admin account already exists, so the one-time setup is complete. Because you are opening this page from the same computer, you can recover access here.</p>
+    <p>An admin account already exists, so the one-time setup is complete. Use this page to recover access, reset the password for an existing admin, or create a new admin if needed.</p>
     <p>Existing admin usernames:</p>
     <ul>{admin_list}</ul>
     <label>Username</label>
@@ -2959,9 +2971,6 @@ def admin_setup_recover(
     email: Optional[str] = Form(None),
     db: Session = Depends(get_db),
 ):
-    if not request_is_localhost(request):
-        raise HTTPException(status_code=403, detail="Admin recovery is only available from localhost")
-
     payload = AdminCreatePayload(username=username, password=password, full_name=full_name, email=email)
     try:
         upsert_admin_recovery_record(db, payload)
@@ -3007,7 +3016,7 @@ def admin_page(db: Session = Depends(get_db)):
     <label>Password</label>
     <input name="password" type="password" required />
     <button type="submit">Sign In</button>
-    <small>This portal is backend-only and not visible in the user app.</small>
+    <small>This portal is backend-only and not visible in the user app. If login fails or you need to reset the admin password, open <a href="/admin/setup" style="color:#67e8f9;">/admin/setup</a>.</small>
   </form>
 </body>
 </html>
