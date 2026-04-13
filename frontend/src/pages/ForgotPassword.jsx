@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { authApi } from "../services/auth";
+import { apiUrl } from "../services/apiBase";
 import "../styles/auth.css";
 
 export default function ForgotPassword() {
@@ -15,7 +16,26 @@ export default function ForgotPassword() {
   const [resendIn, setResendIn] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [mailStatus, setMailStatus] = useState({ checked: false, ready: true, missing: [] });
   const otpRefs = useRef([]);
+
+  useEffect(() => {
+    const fetchConfigStatus = async () => {
+      try {
+        const response = await fetch(apiUrl("/auth/config-status"));
+        const payload = await response.json();
+        setMailStatus({
+          checked: true,
+          ready: Boolean(payload?.mail_delivery_ready),
+          missing: Array.isArray(payload?.missing_mail_fields) ? payload.missing_mail_fields : [],
+        });
+      } catch {
+        setMailStatus({ checked: true, ready: true, missing: [] });
+      }
+    };
+
+    fetchConfigStatus();
+  }, []);
 
   const getPasswordStrength = (value) => {
     if (value.length < 6) return { label: "Weak", score: 25 };
@@ -42,7 +62,14 @@ export default function ForgotPassword() {
       setMessage(payload.detail || payload.message || "OTP sent. Check system console.");
       setResendIn(60);
     } catch (error) {
-      setMessage(error.message);
+      const errorMessage = error?.message || "Unable to send OTP";
+      if (errorMessage.toLowerCase().includes("email configuration is incomplete")) {
+        setMessage(
+          "Password reset email is not configured on the live server yet. Add the mail settings in Render first."
+        );
+        return;
+      }
+      setMessage(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -147,6 +174,15 @@ export default function ForgotPassword() {
         <div className="auth-card">
           <h1>Forgot Password</h1>
           <p>Verify with your registered email and reset your password.</p>
+
+          {mailStatus.checked && !mailStatus.ready ? (
+            <p className="auth-message">
+              Password reset email is not configured on the server yet.
+              {mailStatus.missing.length
+                ? ` Missing settings: ${mailStatus.missing.join(", ")}`
+                : ""}
+            </p>
+          ) : null}
 
         {step === 1 && (
           <form onSubmit={requestCode}>

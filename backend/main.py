@@ -1137,6 +1137,12 @@ def auth_config_status():
 
     return {
         "sms_provider": SMS_PROVIDER,
+        "mail_delivery_ready": is_mail_configured(),
+        "missing_mail_fields": get_missing_mail_fields(),
+        "mail_server_configured": bool(MAIL_SERVER),
+        "mail_username_configured": bool(MAIL_USERNAME),
+        "mail_password_configured": bool(MAIL_PASSWORD),
+        "mail_from_configured": bool(MAIL_FROM),
         "twilio_account_sid_configured": bool(TWILIO_ACCOUNT_SID) and not is_placeholder_value(TWILIO_ACCOUNT_SID),
         "twilio_auth_token_configured": bool(TWILIO_AUTH_TOKEN) and not is_placeholder_value(TWILIO_AUTH_TOKEN),
         "twilio_from_number_configured": bool(TWILIO_FROM_NUMBER) and not is_placeholder_value(TWILIO_FROM_NUMBER),
@@ -1526,6 +1532,25 @@ MAIL_FROM = os.getenv("MAIL_FROM", MAIL_USERNAME).strip()
 MAIL_STARTTLS = os.getenv("MAIL_STARTTLS", "true").strip().lower() == "true"
 MAIL_SSL_TLS = os.getenv("MAIL_SSL_TLS", "false").strip().lower() == "true"
 MAIL_TIMEOUT_SECONDS = float(os.getenv("MAIL_TIMEOUT_SECONDS", "5").strip() or "5")
+
+
+def get_missing_mail_fields() -> list[str]:
+    missing_fields: list[str] = []
+    if not MAIL_SERVER:
+        missing_fields.append("MAIL_SERVER")
+    if not MAIL_PORT:
+        missing_fields.append("MAIL_PORT")
+    if not MAIL_USERNAME:
+        missing_fields.append("MAIL_USERNAME")
+    if not MAIL_PASSWORD:
+        missing_fields.append("MAIL_PASSWORD")
+    if not MAIL_FROM:
+        missing_fields.append("MAIL_FROM")
+    return missing_fields
+
+
+def is_mail_configured() -> bool:
+    return not get_missing_mail_fields()
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
@@ -1991,8 +2016,9 @@ def get_current_worker(
 
 
 def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
-    if not (MAIL_SERVER and MAIL_PORT and MAIL_USERNAME and MAIL_PASSWORD and MAIL_FROM):
-        return False, "Email configuration is incomplete"
+    if not is_mail_configured():
+        missing = ", ".join(get_missing_mail_fields())
+        return False, f"Email configuration is incomplete. Missing: {missing}"
 
     subject = "Urban Sentinel Password Reset Code"
     body = (
