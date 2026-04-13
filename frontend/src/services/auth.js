@@ -16,6 +16,10 @@ async function postJson(path, body) {
       throw new Error(data?.detail || data?.message || `Request failed (${res.status})`);
     }
 
+    if (data?.status === "error") {
+      throw new Error(data?.detail || data?.message || "Request failed");
+    }
+
     return data;
   } catch (err) {
     console.error("API ERROR:", err);

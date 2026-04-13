@@ -611,36 +611,27 @@ function LoginPage(props: LoginPageProps) {
       ? Boolean(savedLogin?.email || savedLogin?.identifier)
       : Boolean(savedLogin?.phone || savedLogin?.phoneWithCode);
 
-  // Admin login handler (for /admin/session-login)
-  const handleAdminLogin = async (e: React.FormEvent) => {
+  // User login handler (for /login)
+  const handleUserLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setIsLoading(true);
     try {
-      const formData = new FormData();
-      formData.append("username", email.trim());
-      formData.append("password", password);
-      const response = await fetch("/admin/session-login", {
-        method: "POST",
-        body: formData,
-        credentials: "include",
-        redirect: "follow"
-      });
-      if (response.redirected) {
-        window.location.href = response.url;
-        return;
+      const payload = await authApi.login({ email: email.trim(), password });
+      const accessToken = payload?.access_token || payload?.token || "";
+      const user = payload?.user || null;
+
+      setAuthSession({ user, token: accessToken });
+
+      if (email.trim()) {
+        localStorage.setItem("rememberedIdentifier", email.trim());
       }
-      if (response.ok) {
-        // Optionally handle success
-        window.location.href = "/admin/setup";
-        return;
-      } else {
-        const text = await response.text();
-        setError(text || "Login failed");
-      }
+
+      navigate("/home", { replace: true });
+      return;
     } catch (err) {
-      setError("Network error");
-      console.error("Admin login error:", err);
+      setError(err instanceof Error ? err.message : "Login failed");
+      console.error("User login error:", err);
     } finally {
       setIsLoading(false);
     }
@@ -870,7 +861,7 @@ function LoginPage(props: LoginPageProps) {
           </div>
 
           {/* Login Form */}
-          <form onSubmit={handleAdminLogin} className="space-y-5" autoComplete="off">
+          <form onSubmit={handleUserLogin} className="space-y-5" autoComplete="off">
             <div className="space-y-3">
               <Label className="text-sm font-medium">Choose login method</Label>
               <div className="grid grid-cols-2 gap-3 rounded-2xl bg-primary/5 p-1.5">
