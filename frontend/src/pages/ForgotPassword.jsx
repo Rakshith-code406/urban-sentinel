@@ -203,21 +203,6 @@ export default function ForgotPassword() {
           <h1>Forgot Password</h1>
           <p>Verify with your registered email and reset your password.</p>
 
-          {mailStatus.checked && !mailStatus.ready ? (
-            <p className="auth-message">
-              Password reset email is not configured on the server yet.
-              {mailStatus.missing.length
-                ? ` Missing settings: ${mailStatus.missing.join(", ")}`
-                : ""}
-            </p>
-          ) : null}
-
-          {mailStatus.checked && mailStatus.otpDeliveryChannel === "screen" ? (
-            <p className="auth-message">
-              OTP screen mode is enabled. After you click send verification code, the OTP will appear here immediately.
-            </p>
-          ) : null}
-
         {step === 1 && (
           <form onSubmit={requestCode}>
             <label htmlFor="forgot-identifier">Registered Email</label>
