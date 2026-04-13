@@ -16,7 +16,7 @@ export default function ForgotPassword() {
   const [resendIn, setResendIn] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [mailStatus, setMailStatus] = useState({ checked: false, ready: true, missing: [] });
+  const [mailStatus, setMailStatus] = useState({ checked: false, ready: true, missing: [], otpDeliveryChannel: "auto" });
   const otpRefs = useRef([]);
 
   useEffect(() => {
@@ -28,9 +28,10 @@ export default function ForgotPassword() {
           checked: true,
           ready: Boolean(payload?.mail_delivery_ready),
           missing: Array.isArray(payload?.missing_mail_fields) ? payload.missing_mail_fields : [],
+          otpDeliveryChannel: payload?.otp_delivery_channel || "auto",
         });
       } catch {
-        setMailStatus({ checked: true, ready: true, missing: [] });
+        setMailStatus({ checked: true, ready: true, missing: [], otpDeliveryChannel: "auto" });
       }
     };
 
@@ -181,6 +182,12 @@ export default function ForgotPassword() {
               {mailStatus.missing.length
                 ? ` Missing settings: ${mailStatus.missing.join(", ")}`
                 : ""}
+            </p>
+          ) : null}
+
+          {mailStatus.checked && mailStatus.otpDeliveryChannel === "screen" ? (
+            <p className="auth-message">
+              OTP screen mode is enabled. After you click send verification code, the OTP will appear here immediately.
             </p>
           ) : null}
 

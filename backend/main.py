@@ -1137,7 +1137,10 @@ def auth_config_status():
 
     return {
         "sms_provider": SMS_PROVIDER,
+        "mail_provider": MAIL_PROVIDER,
         "mail_delivery_ready": is_mail_configured(),
+        "resend_delivery_ready": is_resend_configured(),
+        "otp_delivery_channel": OTP_DELIVERY_CHANNEL,
         "missing_mail_fields": get_missing_mail_fields(),
         "mail_server_configured": bool(MAIL_SERVER),
         "mail_username_configured": bool(MAIL_USERNAME),
@@ -1532,6 +1535,8 @@ MAIL_FROM = os.getenv("MAIL_FROM", MAIL_USERNAME).strip()
 MAIL_STARTTLS = os.getenv("MAIL_STARTTLS", "true").strip().lower() == "true"
 MAIL_SSL_TLS = os.getenv("MAIL_SSL_TLS", "false").strip().lower() == "true"
 MAIL_TIMEOUT_SECONDS = float(os.getenv("MAIL_TIMEOUT_SECONDS", "5").strip() or "5")
+MAIL_PROVIDER = os.getenv("MAIL_PROVIDER", "smtp").strip().lower()
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
 
 
 def get_missing_mail_fields() -> list[str]:
@@ -1551,6 +1556,10 @@ def get_missing_mail_fields() -> list[str]:
 
 def is_mail_configured() -> bool:
     return not get_missing_mail_fields()
+
+
+def is_resend_configured() -> bool:
+    return bool(RESEND_API_KEY and MAIL_FROM)
 
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
@@ -2015,17 +2024,46 @@ def get_current_worker(
     return decode_worker_token(token, db)
 
 
-def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
-    if not is_mail_configured():
-        missing = ", ".join(get_missing_mail_fields())
-        return False, f"Email configuration is incomplete. Missing: {missing}"
+def send_email_via_resend(to_email: str, subject: str, body: str) -> tuple[bool, str]:
+    if not is_resend_configured():
+        return False, "Resend configuration is incomplete"
 
+    try:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": MAIL_FROM,
+                "to": [to_email],
+                "subject": subject,
+                "text": body,
+            },
+            timeout=MAIL_TIMEOUT_SECONDS,
+        )
+        if 200 <= response.status_code < 300:
+            return True, "Email sent via Resend"
+        return False, f"Resend API failed: {response.status_code} {response.text}"
+    except Exception as exc:
+        return False, f"Resend delivery failed: {exc}"
+
+
+def send_otp_email(to_email: str, code: str) -> tuple[bool, str]:
     subject = "Urban Sentinel Password Reset Code"
     body = (
         f"Your Urban Sentinel password reset code is: {code}\n\n"
         "This code expires in 10 minutes.\n"
         "If you did not request this, please ignore this email."
     )
+
+    if MAIL_PROVIDER == "resend":
+        return send_email_via_resend(to_email, subject, body)
+
+    if not is_mail_configured():
+        missing = ", ".join(get_missing_mail_fields())
+        return False, f"Email configuration is incomplete. Missing: {missing}"
 
     msg = EmailMessage()
     msg["Subject"] = subject
@@ -3243,17 +3281,17 @@ def send_otp(payload: ForgotPasswordRequestPayload, db: Session = Depends(get_db
     user.reset_code_expires_at = datetime.utcnow() + timedelta(minutes=10)
     db.commit()
 
+    if OTP_DELIVERY_CHANNEL == "screen" or OTP_DEBUG_MODE:
+        return {
+            "status": "success",
+            "message": "OTP generated successfully",
+            "detail": f"Your OTP is {otp}. It expires in 10 minutes.",
+            "otp": otp,
+            "delivery": "screen",
+        }
+
     mail_sent, mail_message = send_otp_email(user.email, otp)
     if not mail_sent:
-        if OTP_DEBUG_MODE:
-            print(f"[OTP DEBUG] Email delivery failed for {user.email}. OTP={otp}. Reason: {mail_message}")
-            return {
-                "status": "success",
-                "message": "OTP generated in debug mode",
-                "detail": f"Email delivery failed locally. Use OTP: {otp}",
-                "otp": otp,
-                "delivery": "debug",
-            }
         return {
             "status": "error",
             "message": "OTP email delivery failed",
@@ -3265,8 +3303,6 @@ def send_otp(payload: ForgotPasswordRequestPayload, db: Session = Depends(get_db
         "message": "OTP sent successfully",
         "detail": "OTP sent to your email address.",
     }
-    if OTP_DEBUG_MODE:
-        response["otp"] = otp
     return response
 
 
