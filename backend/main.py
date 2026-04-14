@@ -37,6 +37,7 @@ import qrcode
 import requests
 from dotenv import load_dotenv
 from fastapi import (
+    BackgroundTasks,
     Body,
     Depends,
     FastAPI,
@@ -2173,6 +2174,59 @@ def build_closure_receipt_pdf_bytes(issue: Issue, user: Optional[User] = None) -
     return buffer.getvalue()
 
 
+def build_complaint_status_notification(
+    issue: Issue,
+    user: Optional[User],
+    request: Optional[Request] = None,
+) -> Optional[dict]:
+    status_value = (issue.status or "").strip()
+    if status_value not in {"Resolved", "Rejected"}:
+        return None
+
+    complaint_number = issue.complaint_number or "N/A"
+    updated_at = isoformat_app_datetime(issue.updated_at or issue.created_at)
+    user_name = (user.full_name if user else "") or "Citizen"
+    verdict_text = "resolved successfully" if status_value == "Resolved" else "marked as rejected after review"
+    receipt_url = (
+        f"{resolve_api_base_url(request)}/receipt/closure/{complaint_number}"
+        if request is not None
+        else f"/receipt/closure/{complaint_number}"
+    )
+    track_url = build_scan_url(complaint_number, request) if request is not None else f"/track/{complaint_number}"
+    body_lines = [
+        f"Dear {user_name},",
+        f"Your complaint {complaint_number} has been {verdict_text}.",
+        f"Final Status: {status_value}",
+        f"Title: {issue.title or 'N/A'}",
+        f"Location: {issue.location or 'N/A'}",
+        "Please find the closure receipt attached.",
+        f"You can also download it here: {receipt_url}",
+        f"Track complaint status: {track_url}",
+        "Thank you for reporting through Urban Sentinel.",
+    ]
+    return {
+        "type": "complaint_status",
+        "key": f"complaint:{issue.user_id}:{issue.id}:{status_value}:{updated_at}",
+        "subject": f"Urban Sentinel Complaint Update - {complaint_number} ({status_value})",
+        "title": "Complaint status updated",
+        "status": status_value,
+        "issue_id": issue.id,
+        "complaint_number": complaint_number,
+        "updated_at": updated_at,
+        "receipt_url": receipt_url,
+        "track_url": track_url,
+        "body": "\n\n".join(
+            [
+                body_lines[0],
+                "\n".join(body_lines[1:5]),
+                "\n".join(body_lines[5:8]),
+                body_lines[8],
+            ]
+        ),
+        "body_lines": body_lines,
+    }
+
+
 def send_status_update_email(user: User, issue: Issue, request: Optional[Request] = None) -> tuple[bool, str]:
     """Send resolved/rejected email with closure receipt attachment."""
     if not user or not user.email:
@@ -2184,26 +2238,15 @@ def send_status_update_email(user: User, issue: Issue, request: Optional[Request
     if status_value not in {"Resolved", "Rejected"}:
         return False, "Status notification only sent for final states"
 
-    verdict_text = "resolved successfully" if status_value == "Resolved" else "marked as rejected after review"
-    receipt_url = f"{resolve_api_base_url(request)}/receipt/closure/{issue.complaint_number}"
-    scan_url = build_scan_url(issue.complaint_number, request)
-    body = (
-        f"Dear {user.full_name},\n\n"
-        f"Your complaint {issue.complaint_number} has been {verdict_text}.\n"
-        f"Final Status: {status_value}\n"
-        f"Title: {issue.title}\n"
-        f"Location: {issue.location}\n\n"
-        "Please find the closure receipt attached.\n"
-        f"You can also download it here: {receipt_url}\n"
-        f"Track complaint status: {scan_url}\n\n"
-        "Thank you for reporting through Urban Sentinel."
-    )
+    notification = build_complaint_status_notification(issue, user, request)
+    if not notification:
+        return False, "Status notification only sent for final states"
 
     msg = EmailMessage()
-    msg["Subject"] = f"Urban Sentinel Complaint Update - {issue.complaint_number} ({status_value})"
+    msg["Subject"] = notification["subject"]
     msg["From"] = MAIL_FROM
     msg["To"] = user.email
-    msg.set_content(body)
+    msg.set_content(notification["body"])
     pdf_bytes = build_closure_receipt_pdf_bytes(issue, user)
     msg.add_attachment(
         pdf_bytes,
@@ -3824,7 +3867,19 @@ def serialize_user_issue(issue: Issue) -> dict:
         "status": issue.status,
         "media": issue.media_urls if issue.media_urls else [],
         "created_at": isoformat_app_datetime(issue.created_at),
+        "updated_at": isoformat_app_datetime(issue.updated_at),
+        "closureReceiptUrl": (
+            f"/receipt/closure/{issue.complaint_number}"
+            if (issue.status or "").strip() in {"Resolved", "Rejected"}
+            else None
+        ),
     }
+
+
+def serialize_user_issue_with_notification(issue: Issue, user: User) -> dict:
+    serialized = serialize_user_issue(issue)
+    serialized["statusNotification"] = build_complaint_status_notification(issue, user)
+    return serialized
 
 
 def build_user_dashboard_bootstrap_payload(current_user: User, db: Session) -> dict:
@@ -3835,7 +3890,7 @@ def build_user_dashboard_bootstrap_payload(current_user: User, db: Session) -> d
         .all()
     )
     visible_alerts = [
-        item
+        serialize_user_emergency_alert(item)
         for item in get_visible_emergency_alerts()
         if (item.get("user") or {}).get("id") == current_user.id
     ]
@@ -3846,7 +3901,7 @@ def build_user_dashboard_bootstrap_payload(current_user: User, db: Session) -> d
             "pending": sum(1 for issue in issues if issue.status not in {"Resolved", "Rejected"}),
             "resolved": sum(1 for issue in issues if issue.status == "Resolved"),
         },
-        "complaints": [serialize_user_issue(issue) for issue in issues],
+        "complaints": [serialize_user_issue_with_notification(issue, current_user) for issue in issues],
         "alerts": visible_alerts[-20:][::-1],
         "monitoring_alerts": monitoring_alerts[-25:][::-1],
     }
@@ -4055,7 +4110,7 @@ def get_issues(current_user: User = Depends(get_current_user), db: Session = Dep
         cache_key,
         5,
         lambda: [
-            serialize_user_issue(issue)
+            serialize_user_issue_with_notification(issue, current_user)
             for issue in db.query(Issue)
             .filter(Issue.user_id == current_user.id)
             .order_by(Issue.created_at.desc())
@@ -4162,9 +4217,15 @@ def update_status(
         "issue-status-updated",
         {
             "issue_id": issue.id,
+            "user_id": issue.user_id,
             "status": issue.status,
             "worker_status": issue.worker_status,
             "recent_issue": serialize_admin_recent_issue(issue),
+            "notification": build_complaint_status_notification(
+                issue,
+                db.query(User).filter(User.id == issue.user_id).first() if issue.user_id else None,
+                request,
+            ),
         },
     )
 
@@ -7337,36 +7398,20 @@ def create_emergency_alert(
 def send_emergency_resolution_email(alert: dict, status_value: str) -> tuple[bool, str]:
     user = (alert or {}).get("user", {}) or {}
     to_email = (user.get("email") or "").strip()
-    full_name = user.get("full_name") or "Citizen"
     if not to_email:
         return False, "User email missing for emergency alert"
     if not (MAIL_SERVER and MAIL_PORT and MAIL_USERNAME and MAIL_PASSWORD and MAIL_FROM):
         return False, "Email configuration is incomplete"
 
-    sensor = alert.get("sensor_label") or "Emergency sensor"
-    location = alert.get("location") or "Reported location"
-    priority = alert.get("priority") or "High"
-    note = alert.get("note") or "-"
-
-    body = (
-        f"Dear {full_name},\n\n"
-        f"Your emergency alert has been updated by the admin team.\n\n"
-        f"Alert ID: {alert.get('id', '-')}\n"
-        f"Sensor: {sensor}\n"
-        f"Priority: {priority}\n"
-        f"Location: {location}\n"
-        f"Status: {status_value}\n"
-        f"Note: {note}\n\n"
-        "Update: Your emergency issue is solved and necessary action has been completed.\n"
-        "If you still face the issue, please raise a fresh emergency alert.\n\n"
-        "Regards,\nUrban Sentinel Admin"
-    )
+    notification = build_emergency_status_notification(alert, status_value=status_value)
+    if not notification:
+        return False, "Emergency notification data unavailable"
 
     msg = EmailMessage()
-    msg["Subject"] = f"Urban Sentinel Emergency Update - {status_value}"
+    msg["Subject"] = notification["subject"]
     msg["From"] = MAIL_FROM
     msg["To"] = to_email
-    msg.set_content(body)
+    msg.set_content(notification["body"])
 
     try:
         if MAIL_SSL_TLS:
@@ -7385,6 +7430,57 @@ def send_emergency_resolution_email(alert: dict, status_value: str) -> tuple[boo
         return True, "Emergency update email sent"
     except Exception as exc:
         return False, f"Emergency email failed: {exc}"
+
+
+def build_emergency_status_notification(alert: dict, status_value: Optional[str] = None) -> Optional[dict]:
+    user = (alert or {}).get("user", {}) or {}
+    resolved_status = (status_value or alert.get("status") or "").strip()
+    updated_at = str(alert.get("updated_at") or alert.get("created_at") or "").strip()
+    if not resolved_status or not updated_at:
+        return None
+
+    full_name = user.get("full_name") or "Citizen"
+    body_lines = [
+        f"Dear {full_name},",
+        "Your emergency alert has been updated by the admin team.",
+        f"Alert ID: {alert.get('id', '-')}",
+        f"Sensor: {alert.get('sensor_label') or 'Emergency sensor'}",
+        f"Priority: {alert.get('priority') or 'High'}",
+        f"Location: {alert.get('location') or 'Reported location'}",
+        f"Status: {resolved_status}",
+        f"Note: {alert.get('note') or '-'}",
+        (
+            "Update: Your emergency issue is solved and necessary action has been completed."
+            if resolved_status == "Resolved"
+            else "Update: The admin team has reviewed your alert and recorded the latest status."
+        ),
+        "If you still face the issue, please raise a fresh emergency alert.",
+        "Regards,",
+        "Urban Sentinel Admin",
+    ]
+    return {
+        "type": "emergency_status",
+        "key": f"emergency:{user.get('id')}:{alert.get('id')}:{resolved_status}:{updated_at}",
+        "subject": f"Urban Sentinel Emergency Update - {resolved_status}",
+        "title": "Emergency status updated",
+        "status": resolved_status,
+        "alert_id": alert.get("id"),
+        "updated_at": updated_at,
+        "body": "\n\n".join(
+            [
+                body_lines[0],
+                "\n".join(body_lines[1:8]),
+                "\n".join(body_lines[8:]),
+            ]
+        ),
+        "body_lines": body_lines,
+    }
+
+
+def serialize_user_emergency_alert(alert: dict) -> dict:
+    serialized = dict(alert or {})
+    serialized["statusNotification"] = build_emergency_status_notification(serialized)
+    return serialized
 
 
 def find_emergency_alert(alert_id: str) -> Optional[dict]:
@@ -7426,7 +7522,11 @@ def reset_sensor_state_from_emergency(alert: dict):
 @app.get("/user/emergency-alerts")
 def get_user_emergency_alerts(limit: int = 50, current_user: User = Depends(get_current_user)):
     safe_limit = max(1, min(limit, 200))
-    filtered = [a for a in get_visible_emergency_alerts() if a.get("user", {}).get("id") == current_user.id]
+    filtered = [
+        serialize_user_emergency_alert(a)
+        for a in get_visible_emergency_alerts()
+        if a.get("user", {}).get("id") == current_user.id
+    ]
     return {"count": min(len(filtered), safe_limit), "alerts": filtered[-safe_limit:][::-1]}
 
 
@@ -7485,8 +7585,10 @@ def update_emergency_alert_status(
         "emergency-status-updated",
         {
             "alert_id": alert_id,
+            "user_id": (found.get("user") or {}).get("id"),
             "status": normalized,
             "worker_status": found.get("worker_status"),
+            "notification": build_emergency_status_notification(found, normalized),
             "alert": found,
             "reset_snapshot": reset_snapshot,
         },

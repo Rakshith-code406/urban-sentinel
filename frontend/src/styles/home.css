@@ -125,6 +125,136 @@
   border: 1px solid rgba(255, 255, 255, 0.18);
 }
 
+.status-notification-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(4, 18, 30, 0.58);
+  backdrop-filter: blur(10px);
+}
+
+.status-notification-card {
+  width: min(42rem, 100%);
+  max-height: min(100vh - 2rem, 48rem);
+  overflow: auto;
+  padding: clamp(1.1rem, 2vw, 1.6rem);
+  border-radius: 1.5rem;
+  background:
+    radial-gradient(circle at top right, rgba(248, 193, 92, 0.16), transparent 24%),
+    linear-gradient(180deg, #fffdf8 0%, #f7fafc 100%);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 32px 70px rgba(15, 23, 42, 0.24);
+  color: #12212b;
+}
+
+.status-notification-header {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.status-notification-eyebrow {
+  margin: 0;
+  color: #0f766e;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+
+.status-notification-header h2 {
+  margin: 0;
+  font-size: clamp(1.4rem, 2vw, 1.95rem);
+  color: #0f172a;
+}
+
+.status-notification-pill {
+  justify-self: start;
+  padding: 0.38rem 0.78rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  background: #e2e8f0;
+  color: #1e293b;
+}
+
+.status-notification-pill.resolved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-notification-pill.rejected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-notification-pill.in-progress {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-notification-pill.open {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-notification-body {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.72rem;
+}
+
+.status-notification-body p {
+  margin: 0;
+  line-height: 1.65;
+  color: #334155;
+}
+
+.status-notification-links {
+  margin-top: 1rem;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  background: rgba(148, 163, 184, 0.12);
+  color: #334155;
+  font-size: 0.95rem;
+}
+
+.status-notification-actions {
+  margin-top: 1.2rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.status-notification-actions button {
+  border: none;
+  border-radius: 999px;
+  padding: 0.82rem 1.2rem;
+  font-weight: 800;
+  transition: transform 180ms ease, box-shadow 180ms ease, opacity 180ms ease;
+}
+
+.status-notification-actions button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.status-notification-primary {
+  background: linear-gradient(135deg, #0f766e, #0f4c5c);
+  color: #f8fafc;
+  box-shadow: 0 16px 32px rgba(15, 118, 110, 0.22);
+}
+
+.status-notification-secondary {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
 .hero-nav {
   display: flex;
   justify-content: space-between;

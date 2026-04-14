@@ -17,6 +17,7 @@ import "../styles/home.css";
 const POLL_INTERVAL_MS = 10000;
 const LOCATION_STORAGE_KEY = "urbanSentinelLocation";
 const SENSOR_SNAPSHOT_CACHE_KEY = "urbanSentinel.sensorSnapshot";
+const STATUS_NOTIFICATION_DISMISSALS_KEY = "urbanSentinel.statusNotificationDismissals";
 const LOCATION_FALLBACK_LABEL = "Location not available";
 const NON_WEATHER_SIMULATION_CONFIG = {
   noise_level: { baseline: 45, min: 30, max: 120, moderate: 80, danger: 100, drift: 2.4, label: "Noise Level", dangerWhen: "high" },
@@ -68,6 +69,44 @@ function writeCachedSensorSnapshot(snapshot) {
     // Ignore cache write failures.
   }
   return snapshot;
+}
+
+function readDismissedStatusNotifications() {
+  if (typeof localStorage === "undefined") return {};
+  try {
+    return JSON.parse(localStorage.getItem(STATUS_NOTIFICATION_DISMISSALS_KEY) || "{}") || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDismissedStatusNotifications(nextValue) {
+  if (typeof localStorage === "undefined") return nextValue;
+  try {
+    localStorage.setItem(STATUS_NOTIFICATION_DISMISSALS_KEY, JSON.stringify(nextValue));
+  } catch {
+    // Ignore local persistence failures and keep the session usable.
+  }
+  return nextValue;
+}
+
+function buildStatusNotificationQueue(complaints, alerts) {
+  const complaintNotifications = Array.isArray(complaints)
+    ? complaints
+        .map((item) => item?.statusNotification)
+        .filter((item) => item && item.key)
+    : [];
+  const emergencyNotifications = Array.isArray(alerts)
+    ? alerts
+        .map((item) => item?.statusNotification)
+        .filter((item) => item && item.key)
+    : [];
+
+  return [...complaintNotifications, ...emergencyNotifications].sort((left, right) => {
+    const leftTime = left?.updated_at ? new Date(left.updated_at).getTime() : 0;
+    const rightTime = right?.updated_at ? new Date(right.updated_at).getTime() : 0;
+    return leftTime - rightTime;
+  });
 }
 
 function getResolvedSensorValue(sensorId, currentValue, resolutionInfo, config) {
@@ -851,6 +890,11 @@ export default function Home() {
   const queryClient = useQueryClient();
   const cachedBootstrap = readDashboardBootstrapCache();
   const cachedSensorSnapshot = readCachedSensorSnapshot();
+  const initialDismissedNotifications = readDismissedStatusNotifications();
+  const initialStatusNotificationQueue = buildStatusNotificationQueue(
+    cachedBootstrap?.complaints || [],
+    cachedBootstrap?.alerts || []
+  ).filter((item) => item?.key && !initialDismissedNotifications[item.key]);
   const [stats, setStats] = useState(
     () => cachedBootstrap?.stats || { total_issues: 0, pending: 0, resolved: 0 }
   );
@@ -884,6 +928,9 @@ export default function Home() {
   const [showLocationPopup, setShowLocationPopup] = useState(() => {
     return !globalThis.__urbanSentinelLocationPromptHandled;
   });
+  const [dismissedNotifications, setDismissedNotifications] = useState(() => initialDismissedNotifications);
+  const [statusNotificationQueue, setStatusNotificationQueue] = useState(() => initialStatusNotificationQueue);
+  const [statusNotificationBusy, setStatusNotificationBusy] = useState(false);
   const [pendingRoute, setPendingRoute] = useState("");
   const [resolvedAlertSeenAt, setResolvedAlertSeenAt] = useState({});
   const [locationMenuOpen, setLocationMenuOpen] = useState(false);
@@ -914,10 +961,12 @@ export default function Home() {
 
   const hasAdminSession = localStorage.getItem("adminSession") === "true";
   const userProfile = JSON.parse(getStoredUser() || "{}");
+  const currentUserId = userProfile?.id ?? null;
   const profileInitial = String(userProfile?.full_name || userProfile?.email || "U")
     .trim()
     .charAt(0)
     .toUpperCase();
+  const activeStatusNotification = statusNotificationQueue[0] || null;
   const hasLocationAccess =
     (locationState.permission === "granted" || locationState.permission === "manual") &&
     locationState.latitude !== null &&
@@ -947,6 +996,69 @@ export default function Home() {
     setFeedback(text);
     window.setTimeout(() => setFeedback(""), 3500);
   };
+
+  const dismissStatusNotification = useCallback((notificationKey) => {
+    if (!notificationKey) return;
+    setDismissedNotifications((current) => {
+      const nextValue = {
+        ...current,
+        [notificationKey]: Date.now(),
+      };
+      writeDismissedStatusNotifications(nextValue);
+      return nextValue;
+    });
+    setStatusNotificationQueue((current) => current.filter((item) => item.key !== notificationKey));
+  }, []);
+
+  const enqueueStatusNotifications = useCallback(
+    (incomingNotifications) => {
+      const notifications = (Array.isArray(incomingNotifications) ? incomingNotifications : [incomingNotifications]).filter(
+        (item) => item && item.key && !dismissedNotifications[item.key]
+      );
+      if (!notifications.length) return;
+
+      setStatusNotificationQueue((current) => {
+        const existingKeys = new Set(current.map((item) => item.key));
+        const additions = notifications.filter((item) => !existingKeys.has(item.key));
+        if (!additions.length) return current;
+        return [...current, ...additions].sort((left, right) => {
+          const leftTime = left?.updated_at ? new Date(left.updated_at).getTime() : 0;
+          const rightTime = right?.updated_at ? new Date(right.updated_at).getTime() : 0;
+          return leftTime - rightTime;
+        });
+      });
+    },
+    [dismissedNotifications]
+  );
+
+  const downloadClosureStatement = useCallback(
+    async (notification) => {
+      if (!notification?.receipt_url || !notification?.key || statusNotificationBusy) return;
+
+      setStatusNotificationBusy(true);
+      try {
+        const response = await api(notification.receipt_url);
+        if (!response.ok) {
+          throw new Error("Unable to download closure statement.");
+        }
+        const blob = await response.blob();
+        const objectUrl = window.URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = `closure_receipt_${notification.complaint_number || "report"}.pdf`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.URL.revokeObjectURL(objectUrl);
+        dismissStatusNotification(notification.key);
+      } catch (error) {
+        notify(error.message || "Unable to download closure statement.");
+      } finally {
+        setStatusNotificationBusy(false);
+      }
+    },
+    [dismissStatusNotification, notify, statusNotificationBusy]
+  );
 
   useEffect(() => {
     const user = getStoredUser();
@@ -1274,6 +1386,10 @@ export default function Home() {
     setStats(dashboardBootstrapData?.stats || { total_issues: 0, pending: 0, resolved: 0 });
   }, [dashboardBootstrapData]);
 
+  useEffect(() => {
+    enqueueStatusNotifications(buildStatusNotificationQueue(complaints, alerts));
+  }, [alerts, complaints, enqueueStatusNotifications]);
+
   const searchLocation = useCallback(async () => {
     const cleaned = locationQuery.trim();
     if (cleaned.length < 2) {
@@ -1347,8 +1463,20 @@ export default function Home() {
       try {
         const payload = JSON.parse(event.data || "{}");
         const eventType = String(payload?.type || "");
+        const eventUserId = payload?.payload?.user_id ?? null;
+        const eventNotification = payload?.payload?.notification;
+
+        if (
+          eventNotification?.key &&
+          currentUserId !== null &&
+          String(eventUserId) === String(currentUserId)
+        ) {
+          enqueueStatusNotifications(eventNotification);
+        }
+
         if (
           [
+            "issue-status-updated",
             "emergency-alert-created",
             "emergency-status-updated",
             "emergency-deleted",
@@ -1368,7 +1496,7 @@ export default function Home() {
       window.clearTimeout(refreshTimer);
       eventSource.close();
     };
-  }, [fetchDashboardData, fetchSensorData]);
+  }, [currentUserId, enqueueStatusNotifications, fetchDashboardData, fetchSensorData]);
 
   useEffect(() => {
     if (!locationMenuOpen) return undefined;
@@ -2040,7 +2168,7 @@ export default function Home() {
   return (
     <div className="home-page">
       <header className="hero">
-        {showLocationPopup ? (
+        {showLocationPopup && !activeStatusNotification ? (
           <div className="location-modal-backdrop">
             <div className="location-modal-card" role="dialog" aria-modal="true" aria-labelledby="location-modal-title">
               <p className="location-modal-eyebrow">Location Access</p>
@@ -2425,6 +2553,56 @@ export default function Home() {
               </div>
             </div>
           </section>
+        </div>
+      ) : null}
+
+      {activeStatusNotification ? (
+        <div className="status-notification-overlay" role="dialog" aria-modal="true" aria-labelledby="status-notification-title">
+          <div className="status-notification-card">
+            <div className="status-notification-header">
+              <p className="status-notification-eyebrow">
+                {activeStatusNotification.type === "complaint_status" ? "Complaint Update" : "Emergency Update"}
+              </p>
+              <h2 id="status-notification-title">{activeStatusNotification.title || "Status updated"}</h2>
+              <span className={`status-notification-pill ${String(activeStatusNotification.status || "").toLowerCase().replace(/\s+/g, "-")}`}>
+                {activeStatusNotification.status || "Updated"}
+              </span>
+            </div>
+
+            <div className="status-notification-body">
+              {(activeStatusNotification.body_lines || []).map((line, index) => (
+                <p key={`${activeStatusNotification.key}-${index}`}>{line}</p>
+              ))}
+            </div>
+
+            {activeStatusNotification.type === "complaint_status" ? (
+              <div className="status-notification-links">
+                <span>Complaint ID: {activeStatusNotification.complaint_number || "-"}</span>
+                <span>Track: {activeStatusNotification.track_url || "-"}</span>
+              </div>
+            ) : null}
+
+            <div className="status-notification-actions">
+              <button
+                type="button"
+                className="status-notification-secondary"
+                onClick={() => dismissStatusNotification(activeStatusNotification.key)}
+                disabled={statusNotificationBusy}
+              >
+                Close
+              </button>
+              {activeStatusNotification.type === "complaint_status" ? (
+                <button
+                  type="button"
+                  className="status-notification-primary"
+                  onClick={() => downloadClosureStatement(activeStatusNotification)}
+                  disabled={statusNotificationBusy}
+                >
+                  {statusNotificationBusy ? "Preparing..." : "Download closure statement"}
+                </button>
+              ) : null}
+            </div>
+          </div>
         </div>
       ) : null}
 
