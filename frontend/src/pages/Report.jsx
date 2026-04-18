@@ -8,6 +8,7 @@ import { API_BASE } from "../services/apiBase";
 import { clearAuthSession, getAccessToken, getStoredUser } from "../services/session";
 
 const LOCATION_STORAGE_KEY = "urbanSentinelLocation";
+const LOCATION_FALLBACK_LABEL = "Location not available";
 const CAMERA_CONSTRAINTS = [
   {
     video: {
@@ -142,6 +143,23 @@ async function fetchSubmissionStatus(issueId) {
   return response.json();
 }
 
+function getBrowserLanguageHeader() {
+  if (typeof navigator === "undefined") return "en";
+  if (Array.isArray(navigator.languages) && navigator.languages.length) {
+    return navigator.languages.filter(Boolean).join(",");
+  }
+  return navigator.language || "en";
+}
+
+function normalizeLocationLabel(value, latitude, longitude) {
+  const normalized = String(value || "").trim();
+  if (normalized) return normalized;
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+  }
+  return LOCATION_FALLBACK_LABEL;
+}
+
 export default function Report() {
   const navigate = useNavigate();
   const [locationMode, setLocationMode] = useState("manual");
@@ -211,11 +229,23 @@ export default function Report() {
       const nextCoords = [stored.latitude, stored.longitude];
       setSelectedCoords(nextCoords);
       setMapCenter(nextCoords);
-      setLocation(stored.label || `${stored.latitude.toFixed(6)}, ${stored.longitude.toFixed(6)}`);
+      setLocation(normalizeLocationLabel(stored.label, stored.latitude, stored.longitude));
       setLocationMode("auto");
     } catch {
       // Ignore malformed persisted location and fall back to normal report flow.
     }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(LOCATION_STORAGE_KEY) || "null");
+      if (stored?.permission === "granted") {
+        detectLocation(false);
+      }
+    } catch {
+      // Ignore malformed persisted location while trying to refresh device position.
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -289,17 +319,57 @@ export default function Report() {
 
   const reverseGeocode = async (lat, lng) => {
     try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`
-      );
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        lat: String(lat),
+        lon: String(lng),
+        zoom: "18",
+        addressdetails: "1",
+        namedetails: "1",
+      });
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
+        headers: {
+          Accept: "application/json",
+          "Accept-Language": getBrowserLanguageHeader(),
+        },
+      });
       const data = await response.json();
       if (data?.display_name) {
         setLocation(data.display_name);
+        localStorage.setItem(
+          LOCATION_STORAGE_KEY,
+          JSON.stringify({
+            permission: "granted",
+            latitude: lat,
+            longitude: lng,
+            label: data.display_name,
+          })
+        );
       } else {
-        setLocation(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+        const fallbackLabel = normalizeLocationLabel("", lat, lng);
+        setLocation(fallbackLabel);
+        localStorage.setItem(
+          LOCATION_STORAGE_KEY,
+          JSON.stringify({
+            permission: "granted",
+            latitude: lat,
+            longitude: lng,
+            label: fallbackLabel,
+          })
+        );
       }
     } catch {
-      setLocation(`${lat.toFixed(6)}, ${lng.toFixed(6)}`);
+      const fallbackLabel = normalizeLocationLabel("", lat, lng);
+      setLocation(fallbackLabel);
+      localStorage.setItem(
+        LOCATION_STORAGE_KEY,
+        JSON.stringify({
+          permission: "granted",
+          latitude: lat,
+          longitude: lng,
+          label: fallbackLabel,
+        })
+      );
     }
   };
 
@@ -314,7 +384,13 @@ export default function Report() {
 
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(cleaned)}&limit=1`
+        `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(cleaned)}&limit=1&addressdetails=1&namedetails=1`,
+        {
+          headers: {
+            Accept: "application/json",
+            "Accept-Language": getBrowserLanguageHeader(),
+          },
+        }
       );
       const data = await response.json();
       const match = Array.isArray(data) ? data[0] : null;
@@ -327,7 +403,8 @@ export default function Report() {
       const lng = Number(match.lon);
       setSelectedCoords([lat, lng]);
       setMapCenter([lat, lng]);
-      setLocation(match.display_name || cleaned);
+      const nextLabel = normalizeLocationLabel(match.display_name || cleaned, lat, lng);
+      setLocation(nextLabel);
       setFeedback("Manual location pinned on the map.");
     } catch {
       setFeedback("Unable to pin the manual location right now.");
@@ -358,15 +435,15 @@ export default function Report() {
 
       try {
         position = await requestCurrentPosition({
-          enableHighAccuracy: false,
-          timeout: 1200,
-          maximumAge: 300000,
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 0,
         });
       } catch {
         position = await requestCurrentPosition({
-          enableHighAccuracy: true,
-          timeout: 7000,
-          maximumAge: 0,
+          enableHighAccuracy: false,
+          timeout: 10000,
+          maximumAge: 60000,
         });
       }
 
@@ -375,7 +452,7 @@ export default function Report() {
       setMapCenter([latitude, longitude]);
       await reverseGeocode(latitude, longitude);
       if (showFeedback) {
-        setFeedback("Location detected.");
+        setFeedback("Current device location detected.");
       }
     } catch {
       if (showFeedback) {
@@ -395,6 +472,7 @@ export default function Report() {
     }
 
     setSelectedCoords(null);
+    setLocation("");
     setFeedback("Enter the location manually or tap the map to place the pin.");
   };
 

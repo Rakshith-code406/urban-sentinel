@@ -90,6 +90,44 @@ function writeDismissedStatusNotifications(nextValue) {
   return nextValue;
 }
 
+function getBrowserLanguageHeader() {
+  if (typeof navigator === "undefined") return "en";
+  if (Array.isArray(navigator.languages) && navigator.languages.length) {
+    return navigator.languages.filter(Boolean).join(",");
+  }
+  return navigator.language || "en";
+}
+
+function buildNotificationDismissalAliases(notification) {
+  if (!notification) return [];
+  const keys = new Set();
+  if (notification.key) {
+    keys.add(String(notification.key));
+  }
+
+  if (notification.type === "complaint_status") {
+    const complaintNumber = String(notification.complaint_number || "").trim();
+    const status = String(notification.status || "").trim().toLowerCase();
+    if (complaintNumber && status) {
+      keys.add(`complaint_status:${complaintNumber}:${status}`);
+    }
+  }
+
+  if (notification.type === "emergency_status") {
+    const alertId = String(notification.alert_id || notification.id || "").trim();
+    const status = String(notification.status || "").trim().toLowerCase();
+    if (alertId && status) {
+      keys.add(`emergency_status:${alertId}:${status}`);
+    }
+  }
+
+  return [...keys];
+}
+
+function isNotificationDismissed(notification, dismissedMap) {
+  return buildNotificationDismissalAliases(notification).some((key) => dismissedMap[key]);
+}
+
 function buildStatusNotificationQueue(complaints, alerts) {
   const complaintNotifications = Array.isArray(complaints)
     ? complaints
@@ -894,7 +932,7 @@ export default function Home() {
   const initialStatusNotificationQueue = buildStatusNotificationQueue(
     cachedBootstrap?.complaints || [],
     cachedBootstrap?.alerts || []
-  ).filter((item) => item?.key && !initialDismissedNotifications[item.key]);
+  ).filter((item) => item?.key && !isNotificationDismissed(item, initialDismissedNotifications));
   const [stats, setStats] = useState(
     () => cachedBootstrap?.stats || { total_issues: 0, pending: 0, resolved: 0 }
   );
@@ -1000,20 +1038,21 @@ export default function Home() {
   const dismissStatusNotification = useCallback((notificationKey) => {
     if (!notificationKey) return;
     setDismissedNotifications((current) => {
-      const nextValue = {
-        ...current,
-        [notificationKey]: Date.now(),
-      };
+      const notification = statusNotificationQueue.find((item) => item.key === notificationKey);
+      const nextValue = { ...current };
+      buildNotificationDismissalAliases(notification || { key: notificationKey }).forEach((key) => {
+        nextValue[key] = Date.now();
+      });
       writeDismissedStatusNotifications(nextValue);
       return nextValue;
     });
     setStatusNotificationQueue((current) => current.filter((item) => item.key !== notificationKey));
-  }, []);
+  }, [statusNotificationQueue]);
 
   const enqueueStatusNotifications = useCallback(
     (incomingNotifications) => {
       const notifications = (Array.isArray(incomingNotifications) ? incomingNotifications : [incomingNotifications]).filter(
-        (item) => item && item.key && !dismissedNotifications[item.key]
+        (item) => item && item.key && !isNotificationDismissed(item, dismissedNotifications)
       );
       if (!notifications.length) return;
 
@@ -1106,6 +1145,7 @@ export default function Home() {
       const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
         headers: {
           Accept: "application/json",
+          "Accept-Language": getBrowserLanguageHeader(),
         },
       });
 
@@ -1114,11 +1154,19 @@ export default function Home() {
       }
 
       const payload = await response.json();
-      return formatReadableLocation(payload?.address);
+      return String(payload?.display_name || formatReadableLocation(payload?.address) || LOCATION_FALLBACK_LABEL).trim();
     } catch {
       return LOCATION_FALLBACK_LABEL;
     }
   }, []);
+
+  const requestCurrentPosition = useCallback(
+    (options) =>
+      new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
+      }),
+    []
+  );
 
   const fetchLiveEnvironment = useCallback(async (target) => {
     if (
@@ -1200,7 +1248,7 @@ export default function Home() {
     }
   }, []);
 
-  const requestBrowserLocation = useCallback(() => {
+  const requestBrowserLocation = useCallback(async () => {
     if (!navigator.geolocation) {
       persistLocationState({
         permission: "denied",
@@ -1213,39 +1261,51 @@ export default function Home() {
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const readableLocation = await reverseGeocodeCoordinates(position.coords.latitude, position.coords.longitude);
-        persistLocationState({
-          permission: "granted",
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          label: readableLocation,
+    try {
+      let position = null;
+
+      try {
+        position = await requestCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 12000,
+          maximumAge: 0,
         });
-        globalThis.__urbanSentinelLocationPromptHandled = true;
-        setShowLocationPopup(false);
-        if (pendingRoute) {
-          navigate(pendingRoute);
-          setPendingRoute("");
-        }
-        closeLocationModal();
-        setLocationQuery("");
-        setLocationResults([]);
-      },
-      () => {
-        persistLocationState({
-          permission: "denied",
-          latitude: null,
-          longitude: null,
-          label: LOCATION_FALLBACK_LABEL,
+      } catch {
+        position = await requestCurrentPosition({
+          enableHighAccuracy: false,
+          timeout: 10000,
+          maximumAge: 60000,
         });
-        globalThis.__urbanSentinelLocationPromptHandled = true;
-        setShowLocationPopup(false);
+      }
+
+      const readableLocation = await reverseGeocodeCoordinates(position.coords.latitude, position.coords.longitude);
+      persistLocationState({
+        permission: "granted",
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+        label: readableLocation,
+      });
+      globalThis.__urbanSentinelLocationPromptHandled = true;
+      setShowLocationPopup(false);
+      if (pendingRoute) {
+        navigate(pendingRoute);
         setPendingRoute("");
-      },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 300000 }
-    );
-  }, [closeLocationModal, navigate, pendingRoute, persistLocationState, reverseGeocodeCoordinates]);
+      }
+      closeLocationModal();
+      setLocationQuery("");
+      setLocationResults([]);
+    } catch {
+      persistLocationState({
+        permission: "denied",
+        latitude: null,
+        longitude: null,
+        label: LOCATION_FALLBACK_LABEL,
+      });
+      globalThis.__urbanSentinelLocationPromptHandled = true;
+      setShowLocationPopup(false);
+      setPendingRoute("");
+    }
+  }, [closeLocationModal, navigate, pendingRoute, persistLocationState, requestCurrentPosition, reverseGeocodeCoordinates]);
 
   const fetchSensorData = useCallback(async () => {
     try {

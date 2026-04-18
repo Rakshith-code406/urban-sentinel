@@ -2206,7 +2206,7 @@ def build_complaint_status_notification(
     ]
     return {
         "type": "complaint_status",
-        "key": f"complaint:{issue.user_id}:{issue.id}:{status_value}:{updated_at}",
+        "key": f"complaint:{issue.user_id}:{issue.id}:{status_value}",
         "subject": f"Urban Sentinel Complaint Update - {complaint_number} ({status_value})",
         "title": "Complaint status updated",
         "status": status_value,
@@ -7460,7 +7460,7 @@ def build_emergency_status_notification(alert: dict, status_value: Optional[str]
     ]
     return {
         "type": "emergency_status",
-        "key": f"emergency:{user.get('id')}:{alert.get('id')}:{resolved_status}:{updated_at}",
+        "key": f"emergency:{user.get('id')}:{alert.get('id')}:{resolved_status}",
         "subject": f"Urban Sentinel Emergency Update - {resolved_status}",
         "title": "Emergency status updated",
         "status": resolved_status,
